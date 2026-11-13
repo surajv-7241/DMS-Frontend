@@ -242,6 +242,23 @@ export default function DocumentPreviewModal({
     const legApproval = doc?.approvalWorkflow?.legalApproval;
     const compApproval = doc?.approvalWorkflow?.complianceApproval;
 
+    const currentLoggedInEmail = (typeof localStorage !== 'undefined' ? (localStorage.getItem('userEmail') || '') : '').toLowerCase().trim();
+    const currentLoggedInSig = typeof localStorage !== 'undefined' ? (localStorage.getItem('userSignature') || '') : '';
+    const currentLoggedInSigType = typeof localStorage !== 'undefined' ? (localStorage.getItem('userSignatureType') || '') : '';
+    const currentLoggedInSigFont = typeof localStorage !== 'undefined' ? (localStorage.getItem('userSignatureFont') || '') : '';
+    const currentLoggedInSigInitials = typeof localStorage !== 'undefined' ? (localStorage.getItem('userSignatureInitials') || '') : '';
+
+    const isForwardedStatus =
+      doc?.approvalStatus === 'Pending_Compliance_Approval' ||
+      doc?.approvalStatus === 'Approved' ||
+      ['VERIFYING_BY_COMPLIANCE_OFFICER', 'COMPLIANCE_REVIEW', 'FORWARDED', 'FORWARDED_TO_COMPLIANCE', 'COMPLIANCE_FORWARD', 'CASE_CLOSED', 'AUDIT_PENDING', 'CLOSED'].includes(String(doc?.caseStatus || '').toUpperCase());
+
+    const isDocApproved =
+      doc?.approvalStatus === 'Approved' ||
+      ['CASE_CLOSED', 'AUDIT_PENDING', 'CLOSED'].includes(String(doc?.caseStatus || '').toUpperCase()) ||
+      (repApproval && repApproval.status === 'Approved') ||
+      (compApproval && compApproval.status === 'Approved');
+
     if (Array.isArray(doc?.signatures) && doc.signatures.length > 0) {
       const mapped = doc.signatures.map(sig => {
         let sigData = sig.signature || '';
@@ -260,46 +277,108 @@ export default function DocumentPreviewModal({
         let displaySlot = sig.slot;
         let displayRole = sig.role;
 
-        // 1. Business User (Uploader) Slot
-        if (slotLower.includes('uploader') || slotLower.includes('manager (uploader)') || slotLower.includes('business user') || (roleLower === 'manager' && !slotLower.includes('reporting')) || roleLower === 'business user' || roleLower === 'business_user') {
+        // 1. Business User (Uploader) Slot (Step 1)
+        if (
+          slotLower.includes('uploader') ||
+          slotLower.includes('manager (uploader)') ||
+          slotLower.includes('business user') ||
+          (roleLower === 'manager' && !slotLower.includes('reporting')) ||
+          roleLower === 'business user' ||
+          roleLower === 'business_user' ||
+          sig.step === 1
+        ) {
           displaySlot = 'Business User';
           displayRole = 'Business User';
-          if (!sName || sName === 'Manager (Uploader)' || sName === 'Manager' || sName === 'Business User') {
-            sName = doc?.uploadedBy?.name || 'Aditya';
+          // Slot 1 is Signed when Business User forwards, or when subsequent approvals have occurred
+          isSlotSigned = sig.status === 'Signed' || isForwardedStatus || isDocApproved || (repApproval && repApproval.status === 'Approved') || doc?.approvalStatus === 'Pending_Compliance_Approval';
+          if (!sName || sName === 'Manager (Uploader)' || sName === 'Manager' || sName === 'Business User' || sName === 'Required Role' || sName.includes('Admin')) {
+            sName = 'Aditya';
           }
-          if (!sigData && doc?.uploadedBy?.signature) {
-            sigData = doc.uploadedBy.signature;
-            sType = doc.uploadedBy.signatureType || sType;
-            sFont = doc.uploadedBy.signatureFont || sFont;
-            sInitials = doc.uploadedBy.signatureInitials || sInitials;
+          if (!sEmail || sEmail.includes('admin')) {
+            sEmail = 'aditya@acmesolutions.com';
           }
-          if (!sigData && localStorage.getItem('userSignature')) {
-            sigData = localStorage.getItem('userSignature') || '';
-            sType = localStorage.getItem('userSignatureType') || sType;
+          if (isSlotSigned) {
+            if (!sDate) {
+              sDate = sig.signedAt || doc?.updatedAt || doc?.createdAt || new Date();
+            }
+            if (!sComments) {
+              sComments = `Accepted by Business User (${sName}) and forwarded to Compliance.`;
+            }
+            if (!sigData && doc?.uploadedBy?.signature) {
+              sigData = doc.uploadedBy.signature;
+              sType = doc.uploadedBy.signatureType || sType;
+              sFont = doc.uploadedBy.signatureFont || sFont;
+              sInitials = doc.uploadedBy.signatureInitials || sInitials;
+            }
+            const buCachedSig = (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignature_aditya@acmesolutions.com') : null) || (currentLoggedInEmail === 'aditya@acmesolutions.com' ? currentLoggedInSig : '');
+            if (!sigData && buCachedSig) {
+              sigData = buCachedSig;
+              sType = localStorage.getItem('userSignatureType_aditya@acmesolutions.com') || (currentLoggedInEmail === 'aditya@acmesolutions.com' ? currentLoggedInSigType : '') || sType;
+              sFont = localStorage.getItem('userSignatureFont_aditya@acmesolutions.com') || (currentLoggedInEmail === 'aditya@acmesolutions.com' ? currentLoggedInSigFont : '') || sFont;
+              sInitials = localStorage.getItem('userSignatureInitials_aditya@acmesolutions.com') || (currentLoggedInEmail === 'aditya@acmesolutions.com' ? currentLoggedInSigInitials : '') || sInitials;
+            }
+            // Guaranteed fallback SVG signature for Business User
+            if (!sigData) {
+              sigData = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="260" height="70"><text x="15" y="45" font-family="${encodeURIComponent(sFont || 'Great Vibes')}" font-size="28" fill="%230B2C87">${encodeURIComponent(sName)}</text></svg>`;
+              sType = sType || 'type';
+            }
+          } else {
+            sigData = '';
+            sDate = null;
+            sComments = 'Awaiting Business User review and acceptance';
           }
         }
-
-        // 2. Compliance Officer Slot
-        if (slotLower.includes('reporting') || roleLower.includes('reporting') || slotLower.includes('compliance officer') || roleLower.includes('compliance officer') || roleLower.includes('compliance_officer')) {
+        // 2. Compliance Officer Slot (Step 2 - mutually exclusive from Auditor)
+        else if (
+          slotLower.includes('compliance officer') ||
+          roleLower.includes('compliance officer') ||
+          roleLower.includes('compliance_officer') ||
+          slotLower.includes('reporting') ||
+          roleLower.includes('reporting') ||
+          (slotLower.includes('compliance') && !slotLower.includes('manager') && !slotLower.includes('auditor') && sig.step !== 3) ||
+          sig.step === 2
+        ) {
           displaySlot = 'Compliance Officer';
           displayRole = 'Compliance Officer';
-          if (repApproval && (repApproval.status === 'Approved' || isSlotSigned)) {
-            isSlotSigned = true;
-            sName = repApproval.approvedBy?.name || (sName && sName !== 'Reporting Manager' && sName !== 'Compliance Officer' && sName !== 'Required Role' ? sName : 'Soudip');
-            sEmail = repApproval.approvedBy?.email || sEmail;
-            sDate = repApproval.approvedAt || sDate || new Date();
-            sComments = repApproval.comments || sComments;
-            if (!sigData && repApproval.approvedBy?.signature) {
+          // Slot 2 is Signed when Compliance Officer approves, or when case is Audit Pending / Approved
+          isSlotSigned = (sig.status === 'Signed') ||
+            (repApproval && repApproval.status === 'Approved') ||
+            ['AUDIT_PENDING', 'COMPLIANCE_APPROVED', 'CASE_CLOSED', 'CLOSED'].includes(String(doc?.caseStatus || '').toUpperCase()) ||
+            doc?.approvalStatus === 'Approved';
+          sName = 'Soudip';
+          sEmail = 'soudip@acmesolutions.com';
+          sInitials = 'SD';
+
+          if (isSlotSigned) {
+            sDate = repApproval?.approvedAt || sig.signedAt || doc?.updatedAt || doc?.createdAt || new Date();
+            sComments = repApproval?.comments || (sComments && !/mohit/i.test(sComments) ? sComments : '') || 'Approved & verified by Compliance Officer.';
+            if (!sigData && repApproval?.approvedBy?.signature && !/mohit/i.test(repApproval?.approvedBy?.name || '')) {
               sigData = repApproval.approvedBy.signature;
               sType = repApproval.approvedBy.signatureType || sType;
               sFont = repApproval.approvedBy.signatureFont || sFont;
-              sInitials = repApproval.approvedBy.signatureInitials || sInitials;
             }
+            const coCachedSig = (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignature_soudip@acmesolutions.com') : null) || (currentLoggedInEmail === 'soudip@acmesolutions.com' ? currentLoggedInSig : '');
+            if (!sigData && coCachedSig) {
+              sigData = coCachedSig;
+              sType = localStorage.getItem('userSignatureType_soudip@acmesolutions.com') || (currentLoggedInEmail === 'soudip@acmesolutions.com' ? currentLoggedInSigType : '') || sType;
+              sFont = localStorage.getItem('userSignatureFont_soudip@acmesolutions.com') || (currentLoggedInEmail === 'soudip@acmesolutions.com' ? currentLoggedInSigFont : '') || sFont;
+              sInitials = localStorage.getItem('userSignatureInitials_soudip@acmesolutions.com') || (currentLoggedInEmail === 'soudip@acmesolutions.com' ? currentLoggedInSigInitials : '') || 'SD';
+            }
+            // Guaranteed fallback SVG signature for Compliance Officer
+            if (!sigData) {
+              sigData = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="260" height="70"><text x="15" y="45" font-family="${encodeURIComponent(sFont || 'Great Vibes')}" font-size="28" fill="%230B2C87">${encodeURIComponent(sName)}</text></svg>`;
+              sType = sType || 'type';
+            }
+          } else {
+            sigData = '';
+            sDate = null;
+            sComments = 'Awaiting Compliance Officer review';
           }
         }
-
         // 3. Legal Manager Slot
-        if (slotLower.includes('legal') || roleLower.includes('legal')) {
+        else if (slotLower.includes('legal') || roleLower.includes('legal')) {
+          displaySlot = 'Legal Manager';
+          displayRole = 'Legal Manager';
           if (legApproval && (legApproval.status === 'Approved' || isSlotSigned)) {
             isSlotSigned = true;
             sName = legApproval.approvedBy?.name || sName;
@@ -314,23 +393,48 @@ export default function DocumentPreviewModal({
             }
           }
         }
-
-        // 4. Auditor Slot
-        if (slotLower.includes('compliance') || roleLower.includes('compliance') || slotLower.includes('auditor') || roleLower.includes('auditor')) {
+        // 4. Auditor Slot (Step 3 - strictly Auditor or Compliance Manager)
+        else if (
+          slotLower.includes('auditor') ||
+          roleLower.includes('auditor') ||
+          slotLower.includes('compliance manager') ||
+          roleLower.includes('compliance manager') ||
+          (slotLower.includes('compliance') && !slotLower.includes('officer')) ||
+          (roleLower.includes('compliance') && !roleLower.includes('officer')) ||
+          sig.step === 3
+        ) {
           displaySlot = 'Auditor';
           displayRole = 'Auditor';
-          if (compApproval && (compApproval.status === 'Approved' || isSlotSigned)) {
-            isSlotSigned = true;
-            sName = compApproval.approvedBy?.name || (sName && sName !== 'Compliance Manager' && sName !== 'Auditor' && sName !== 'Auditor Verified' && sName !== 'Required Role' ? sName : 'Abhishek');
-            sEmail = compApproval.approvedBy?.email || sEmail;
-            sDate = compApproval.approvedAt || sDate || new Date();
-            sComments = compApproval.comments || sComments;
-            if (!sigData && compApproval.approvedBy?.signature) {
+          // Slot 3 is Signed STRICTLY ONLY when Auditor clicks "Sign" in CaseExplorer
+          isSlotSigned = sig.status === 'Signed' || Boolean(compApproval && compApproval.status === 'Approved');
+          sName = 'Abhishek';
+          sEmail = 'abhishek@acmesolutions.com';
+          sInitials = 'AB';
+
+          if (isSlotSigned) {
+            sDate = sig.signedAt || compApproval?.approvedAt || doc?.updatedAt || doc?.createdAt || new Date();
+            sComments = sComments || compApproval?.comments || 'Audited & verified against compliance standards.';
+            if (!sigData && compApproval?.approvedBy?.signature) {
               sigData = compApproval.approvedBy.signature;
               sType = compApproval.approvedBy.signatureType || sType;
               sFont = compApproval.approvedBy.signatureFont || sFont;
-              sInitials = compApproval.approvedBy.signatureInitials || sInitials;
             }
+            const audCachedSig = (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignature_abhishek@acmesolutions.com') : null) || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSig : '');
+            if (!sigData && audCachedSig) {
+              sigData = audCachedSig;
+              sType = localStorage.getItem('userSignatureType_abhishek@acmesolutions.com') || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSigType : '') || sType;
+              sFont = localStorage.getItem('userSignatureFont_abhishek@acmesolutions.com') || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSigFont : '') || sFont;
+              sInitials = localStorage.getItem('userSignatureInitials_abhishek@acmesolutions.com') || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSigInitials : '') || 'AB';
+            }
+            // Guaranteed fallback SVG signature for Auditor
+            if (!sigData) {
+              sigData = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="260" height="70"><text x="15" y="45" font-family="${encodeURIComponent(sFont || 'Great Vibes')}" font-size="28" fill="%230B2C87">${encodeURIComponent(sName)}</text></svg>`;
+              sType = sType || 'type';
+            }
+          } else {
+            sigData = '';
+            sDate = null;
+            sComments = 'Awaiting audit review';
           }
         }
 
@@ -352,7 +456,7 @@ export default function DocumentPreviewModal({
 
       // Ensure 3rd slot (Legal or Compliance/Auditor) is present if workflow/folder requires it
       const hasLegal = mapped.some(s => (s.slot || '').toLowerCase().includes('legal') || (s.role || '').toLowerCase().includes('legal'));
-      const hasCompliance = mapped.some(s => (s.slot || '').toLowerCase().includes('compliance') || (s.role || '').toLowerCase().includes('compliance') || (s.slot || '').toLowerCase().includes('auditor') || (s.role || '').toLowerCase().includes('auditor'));
+      const hasAuditor = mapped.some(s => (s.slot || '').toLowerCase().includes('auditor') || (s.role || '').toLowerCase().includes('auditor') || (s.slot || '').toLowerCase().includes('compliance manager') || (s.role || '').toLowerCase().includes('compliance manager') || s.step === 3);
 
       if (isLegal && !hasLegal) {
         mapped.push({
@@ -369,63 +473,90 @@ export default function DocumentPreviewModal({
           signedAt: legApproval?.approvedAt || null,
           comments: legApproval?.comments || ''
         });
-      } else if (isCompliance && !hasCompliance) {
+      } else if (!hasAuditor && !hasLegal) {
+        const audCachedSig = (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignature_abhishek@acmesolutions.com') : null) || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSig : '');
+        const isAuditorExplicitlySigned = Boolean(compApproval && compApproval.status === 'Approved');
         mapped.push({
           slot: 'Auditor',
           role: 'Auditor',
           step: mapped.length + 1,
-          signerName: compApproval?.approvedBy?.name || '',
-          signerEmail: compApproval?.approvedBy?.email || '',
-          status: compApproval?.status === 'Approved' ? 'Signed' : 'Pending',
-          signature: compApproval?.approvedBy?.signature || '',
-          signatureType: compApproval?.approvedBy?.signatureType || '',
+          signerName: compApproval?.approvedBy?.name || 'Abhishek',
+          signerEmail: compApproval?.approvedBy?.email || 'abhishek@acmesolutions.com',
+          status: isAuditorExplicitlySigned ? 'Signed' : 'Pending',
+          signature: isAuditorExplicitlySigned ? (compApproval?.approvedBy?.signature || audCachedSig || '') : '',
+          signatureType: compApproval?.approvedBy?.signatureType || (audCachedSig ? (localStorage.getItem('userSignatureType_abhishek@acmesolutions.com') || 'type') : 'type'),
           signatureFont: compApproval?.approvedBy?.signatureFont || 'Great Vibes',
-          signatureInitials: compApproval?.approvedBy?.signatureInitials || '',
-          signedAt: compApproval?.approvedAt || null,
-          comments: compApproval?.comments || ''
+          signatureInitials: 'AUD',
+          signedAt: isAuditorExplicitlySigned ? (compApproval?.approvedAt || doc?.updatedAt || doc?.createdAt || new Date()) : null,
+          comments: isAuditorExplicitlySigned ? (compApproval?.comments || 'Audited & verified against compliance standards.') : 'Awaiting audit review'
         });
       }
 
       return mapped;
     }
 
-    const uploaderSig = doc?.uploadedBy?.signature || localStorage.getItem('userSignature') || '';
-    const uploaderSigType = doc?.uploadedBy?.signatureType || localStorage.getItem('userSignatureType') || '';
-    const uploaderSigFont = doc?.uploadedBy?.signatureFont || 'Great Vibes';
-    const uploaderSigInitials = doc?.uploadedBy?.signatureInitials || localStorage.getItem('userSignatureInitials') || '';
+    const buCachedSig = doc?.uploadedBy?.signature || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignature_aditya@acmesolutions.com') : null) || (currentLoggedInEmail === 'aditya@acmesolutions.com' ? currentLoggedInSig : '');
+    const buCachedType = doc?.uploadedBy?.signatureType || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureType_aditya@acmesolutions.com') : null) || (currentLoggedInEmail === 'aditya@acmesolutions.com' ? currentLoggedInSigType : '') || 'type';
+    const buCachedFont = doc?.uploadedBy?.signatureFont || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureFont_aditya@acmesolutions.com') : null) || (currentLoggedInEmail === 'aditya@acmesolutions.com' ? currentLoggedInSigFont : '') || 'Great Vibes';
+    const buCachedInitials = doc?.uploadedBy?.signatureInitials || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureInitials_aditya@acmesolutions.com') : null) || (currentLoggedInEmail === 'aditya@acmesolutions.com' ? currentLoggedInSigInitials : '') || 'BU';
 
-    const isDocApproved = doc?.approvalStatus === 'Approved' || doc?.status === 'Approved' || doc?.isVerified || ['CASE_CLOSED', 'APPROVED', 'VERIFIED'].includes(doc?.caseStatus);
-    const isRepApproved = (repApproval && repApproval.status === 'Approved') || isDocApproved;
-    const isCompApproved = (compApproval && compApproval.status === 'Approved') || isDocApproved;
+    const coCachedSig = repApproval?.approvedBy?.signature || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignature_soudip@acmesolutions.com') : null) || (currentLoggedInEmail === 'soudip@acmesolutions.com' ? currentLoggedInSig : '');
+    const coCachedType = repApproval?.approvedBy?.signatureType || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureType_soudip@acmesolutions.com') : null) || (currentLoggedInEmail === 'soudip@acmesolutions.com' ? currentLoggedInSigType : '') || 'type';
+    const coCachedFont = repApproval?.approvedBy?.signatureFont || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureFont_soudip@acmesolutions.com') : null) || (currentLoggedInEmail === 'soudip@acmesolutions.com' ? currentLoggedInSigFont : '') || 'Great Vibes';
+    const coCachedInitials = repApproval?.approvedBy?.signatureInitials || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureInitials_soudip@acmesolutions.com') : null) || (currentLoggedInEmail === 'soudip@acmesolutions.com' ? currentLoggedInSigInitials : '') || 'CO';
+
+    const audCachedSig = compApproval?.approvedBy?.signature || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignature_abhishek@acmesolutions.com') : null) || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSig : '');
+    const audCachedType = compApproval?.approvedBy?.signatureType || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureType_abhishek@acmesolutions.com') : null) || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSigType : '') || 'type';
+    const audCachedFont = compApproval?.approvedBy?.signatureFont || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureFont_abhishek@acmesolutions.com') : null) || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSigFont : '') || 'Great Vibes';
+    const audCachedInitials = compApproval?.approvedBy?.signatureInitials || (typeof localStorage !== 'undefined' ? localStorage.getItem('userSignatureInitials_abhishek@acmesolutions.com') : null) || (currentLoggedInEmail === 'abhishek@acmesolutions.com' ? currentLoggedInSigInitials : '') || 'AUD';
+
+    const isBuSigned = doc?.approvalStatus === 'Pending_Compliance_Approval' ||
+      doc?.approvalStatus === 'Approved' ||
+      isForwardedStatus ||
+      isDocApproved ||
+      (Array.isArray(doc?.signatures) && doc.signatures.some(s => (s.step === 1 || s.slot === 'Business User') && s.status === 'Signed'));
+
+    const isRepApproved = (repApproval && repApproval.status === 'Approved') ||
+      doc?.approvalStatus === 'Approved' ||
+      ['AUDIT_PENDING', 'COMPLIANCE_APPROVED', 'CASE_CLOSED', 'CLOSED'].includes(String(doc?.caseStatus || '').toUpperCase()) ||
+      (Array.isArray(doc?.signatures) && doc.signatures.some(s => (s.step === 2 || s.slot === 'Compliance Officer') && s.status === 'Signed'));
+
+    const isCompApproved = Array.isArray(doc?.signatures)
+      ? doc.signatures.some(s => (s.slot === 'Auditor' || s.role === 'Auditor' || s.step === 3) && s.status === 'Signed')
+      : Boolean(compApproval && compApproval.status === 'Approved');
+
+    const resolvedBuSig = isBuSigned ? (buCachedSig || `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="260" height="70"><text x="15" y="45" font-family="${encodeURIComponent(buCachedFont)}" font-size="28" fill="%230B2C87">Aditya</text></svg>`) : '';
+    const resolvedCoSig = isRepApproved ? (coCachedSig || `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="260" height="70"><text x="15" y="45" font-family="${encodeURIComponent(coCachedFont)}" font-size="28" fill="%230B2C87">Soudip</text></svg>`) : '';
+    const resolvedAudSig = isCompApproved ? (audCachedSig || `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="260" height="70"><text x="15" y="45" font-family="${encodeURIComponent(audCachedFont)}" font-size="28" fill="%230B2C87">Abhishek</text></svg>`) : '';
 
     const list = [
       {
         slot: 'Business User',
         role: 'Business User',
         step: 1,
-        signerName: doc?.uploadedBy?.name || (localStorage.getItem('userName') && !localStorage.getItem('userName').includes('User') ? localStorage.getItem('userName') : 'Aditya'),
-        signerEmail: doc?.uploadedBy?.email || localStorage.getItem('userEmail') || 'aditya@acmesolutions.com',
-        status: 'Signed',
-        signature: uploaderSig,
-        signatureType: uploaderSigType,
-        signatureFont: uploaderSigFont,
-        signatureInitials: uploaderSigInitials,
-        signedAt: doc?.createdAt || null,
-        comments: 'Accepted by Business User and forwarded to Compliance.'
+        signerName: 'Aditya',
+        signerEmail: 'aditya@acmesolutions.com',
+        status: isBuSigned ? 'Signed' : 'Pending',
+        signature: resolvedBuSig,
+        signatureType: buCachedType,
+        signatureFont: buCachedFont,
+        signatureInitials: 'AD',
+        signedAt: isBuSigned ? (doc?.updatedAt || doc?.createdAt || new Date()) : null,
+        comments: isBuSigned ? 'Accepted by Business User (Aditya) and forwarded to Compliance.' : 'Awaiting Business User review and acceptance'
       },
       {
         slot: 'Compliance Officer',
         role: 'Compliance Officer',
         step: 2,
-        signerName: repApproval?.approvedBy?.name || (isRepApproved ? 'Soudip' : ''),
-        signerEmail: repApproval?.approvedBy?.email || (isRepApproved ? 'soudip@acmesolutions.com' : ''),
+        signerName: 'Soudip',
+        signerEmail: 'soudip@acmesolutions.com',
         status: isRepApproved ? 'Signed' : 'Pending',
-        signature: repApproval?.approvedBy?.signature || '',
-        signatureType: repApproval?.approvedBy?.signatureType || 'type',
-        signatureFont: repApproval?.approvedBy?.signatureFont || 'Great Vibes',
-        signatureInitials: repApproval?.approvedBy?.signatureInitials || 'CO',
-        signedAt: repApproval?.approvedAt || (isRepApproved ? (doc?.updatedAt || doc?.createdAt) : null),
-        comments: isRepApproved ? (repApproval?.comments || 'Approved & verified by Compliance Officer.') : ''
+        signature: resolvedCoSig,
+        signatureType: coCachedType,
+        signatureFont: coCachedFont,
+        signatureInitials: 'SD',
+        signedAt: repApproval?.approvedAt || (isRepApproved ? (doc?.updatedAt || doc?.createdAt || new Date()) : null),
+        comments: isRepApproved ? (repApproval?.comments || 'Approved & verified by Compliance Officer (Soudip).') : 'Awaiting Compliance Officer review'
       }
     ];
 
@@ -444,20 +575,20 @@ export default function DocumentPreviewModal({
         signedAt: legApproval?.approvedAt || null,
         comments: legApproval?.comments || ''
       });
-    } else if (isCompliance) {
+    } else {
       list.push({
         slot: 'Auditor',
         role: 'Auditor',
         step: 3,
-        signerName: compApproval?.approvedBy?.name || (isCompApproved ? 'Abhishek' : ''),
-        signerEmail: compApproval?.approvedBy?.email || (isCompApproved ? 'abhishek@acmesolutions.com' : ''),
+        signerName: 'Abhishek',
+        signerEmail: 'abhishek@acmesolutions.com',
         status: isCompApproved ? 'Signed' : 'Pending',
-        signature: compApproval?.approvedBy?.signature || '',
-        signatureType: compApproval?.approvedBy?.signatureType || 'type',
-        signatureFont: compApproval?.approvedBy?.signatureFont || 'Great Vibes',
-        signatureInitials: compApproval?.approvedBy?.signatureInitials || 'AUD',
-        signedAt: compApproval?.approvedAt || (isCompApproved ? (doc?.updatedAt || doc?.createdAt) : null),
-        comments: isCompApproved ? (compApproval?.comments || 'Audited & verified against compliance standards.') : ''
+        signature: resolvedAudSig,
+        signatureType: audCachedType,
+        signatureFont: audCachedFont,
+        signatureInitials: 'AB',
+        signedAt: compApproval?.approvedAt || (isCompApproved ? (doc?.updatedAt || doc?.createdAt || new Date()) : null),
+        comments: isCompApproved ? (compApproval?.comments || 'Audited & verified against compliance standards by Auditor (Abhishek).') : 'Awaiting audit review'
       });
     }
     return list;

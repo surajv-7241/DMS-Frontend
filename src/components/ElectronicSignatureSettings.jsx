@@ -447,9 +447,17 @@ export default function ElectronicSignatureSettings({
         setIsEditing(false);
         setSuccessMessage(`E-Signature successfully registered to your profile via ${chosenMethod.toUpperCase()} method!`);
 
-        // Cache in local storage for fast instant stamp access across document workflows
+        // Cache in local storage scoped to user email to ensure strict multi-party isolation
+        const userEmail = (userProfile?.email || localStorage.getItem("userEmail") || "").toLowerCase().trim();
+        if (userEmail) {
+          localStorage.setItem(`userSignature_${userEmail}`, finalSignatureDataUrl);
+          localStorage.setItem(`userSignatureType_${userEmail}`, chosenMethod);
+          if (selectedFont) localStorage.setItem(`userSignatureFont_${userEmail}`, selectedFont);
+          if (initials) localStorage.setItem(`userSignatureInitials_${userEmail}`, initials);
+        }
         localStorage.setItem("userSignature", finalSignatureDataUrl);
         localStorage.setItem("userSignatureType", chosenMethod);
+        if (selectedFont) localStorage.setItem("userSignatureFont", selectedFont);
         if (initials) localStorage.setItem("userSignatureInitials", initials);
 
         if (onProfileUpdated) {
@@ -499,7 +507,17 @@ export default function ElectronicSignatureSettings({
         setDrawnSignatureData("");
         clearCanvas();
         setIsEditing(true);
+
+        const userEmail = (userProfile?.email || localStorage.getItem("userEmail") || "").toLowerCase().trim();
+        if (userEmail) {
+          localStorage.removeItem(`userSignature_${userEmail}`);
+          localStorage.removeItem(`userSignatureType_${userEmail}`);
+          localStorage.removeItem(`userSignatureFont_${userEmail}`);
+          localStorage.removeItem(`userSignatureInitials_${userEmail}`);
+        }
         localStorage.removeItem("userSignature");
+        localStorage.removeItem("userSignatureType");
+        localStorage.removeItem("userSignatureFont");
         localStorage.removeItem("userSignatureInitials");
         setSuccessMessage("E-Signature removed successfully.");
         if (onProfileUpdated) onProfileUpdated(data.data);
